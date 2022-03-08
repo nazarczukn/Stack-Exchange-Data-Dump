@@ -1,0 +1,584 @@
+---
+title: "Assignment 1"
+author: "Natalia Nazarczuk"
+date: "4 12 2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(sqldf)
+library(dplyr)
+library(data.table)
+library(compare)
+library(microbenchmark)
+
+
+Badges <- read.csv("C:/Users/Natalia/Downloads/Badges.csv.gz")
+Comments <- read.csv("C:/Users/Natalia/Downloads/Comments.csv.gz")
+PostLinks <- read.csv("C:/Users/Natalia/Downloads/PostLinks.csv.gz")
+Posts <- read.csv("C:/Users/Natalia/Downloads/Posts.csv.gz")
+Tags <- read.csv("C:/Users/Natalia/Downloads/Tags.csv.gz")
+Users <- read.csv("C:/Users/Natalia/Downloads/Users.csv.gz")
+Votes <- read.csv("C:/Users/Natalia/Downloads/Votes.csv.gz")
+```
+
+## First query
+In the first task the query is supposed to return the name, the class associated with this class and a number of the people with such badge. The 'Badges' data set is used and the results are group by their name and ordered by the counted 'Number' descending.
+
+```{r sql_1, warning=FALSE, cache=TRUE}
+sql_1 <- function(Badges){
+  s1 <- sqldf('SELECT 
+            Name,
+            COUNT(*) AS Number,
+            Class
+            FROM Badges 
+            GROUP BY Name 
+            ORDER BY Number DESC 
+            LIMIT 10')
+  s1
+}
+sql_1(Badges)
+```
+
+
+Using only base functions the most useful functions turned out to be table(), which counts the occurrences of distinct names and puts it in the data frame, and also megre() for putting two data frames together.
+```{r base_1, warning=FALSE, cache=TRUE}
+base_1 <- function(Badges){
+  
+  df <- as.data.frame(table(Badges$Name)) 
+  colnames(df) <- c("Name", "Number")
+  df <- unique(merge(x = df, y = Badges[ , c("Name", "Class")])) 
+  df <- df[order(df$Number, decreasing = TRUE),] 
+  rownames(df) <- NULL
+  
+  df[1:10,] 
+}
+base_1(Badges)
+```
+
+
+With dplyr package adding 'Number' column is much more intuitive, as it is simply done by function add_count(). 
+```{r dplyr_1, warning=FALSE, cache=TRUE}
+dplyr_1 <- function(Badges){
+  
+ df <- Badges %>% 
+  add_count(.,Name,wt=NULL,sort=FALSE,name = "Number") %>%
+  select(Name, Number, Class) %>%
+  distinct(.,Name, Number, .keep_all = TRUE) %>%
+  arrange(.,desc(Number)) %>%
+  slice(1:10)
+ 
+ df
+}
+dplyr_1(Badges)
+```
+
+
+Firstly, while using data.table package, we need to convert 'Badges' dataset into a data table.
+In this approach we can do many things inside square brackets. We add 'Number' variable by counting rows wit .N and setting key to 'Name'.
+```{r warning=FALSE, cache=TRUE}
+datatable_1 <- function(Badges){
+  
+  BadgesDT <- as.data.table(Badges)
+  NumbersVAL <- BadgesDT[, .(Number = .N), key = Name]
+  dt <- BadgesDT[NumbersVAL, on = "Name"]
+  dt <- unique(dt[, .(Name, Number, Class)], by = "Name")
+  dt <- setorder(dt, -Number)  
+  
+  dt[1:10,] 
+}
+
+```
+
+
+Checking the correctness of each of those functions by compare function and we can tell by the results that the solutions are equivalent. 
+```{r compare1, warning=FALSE, message=FALSE, cache=TRUE}
+compare(sql_1(Badges), base_1(Badges), allowAll = TRUE)
+compare(sql_1(Badges), dplyr_1(Badges), allowAll = TRUE)
+compare(sql_1(Badges), datatable_1(Badges), allowAll = TRUE)
+```
+
+
+Comparison of the execution times of each function is presented below. 
+```{r micro1, warning=FALSE, cache=TRUE}
+microbenchmark(
+sqldf=sql_1(Badges),
+base=base_1(Badges),
+dplyr=dplyr_1(Badges),
+data.table=datatable_1(Badges)
+)
+```
+
+
+
+## Second query
+In the second task the query is supposed to return 10 locations with the most users, excluding the empty one. The results are grouped by 'Location' and ordered by 'Count' descending.
+
+```{r sql_2, warning=FALSE, cache=TRUE}
+sql_2 <- function(Posts, Users){
+  s2 <- sqldf('SELECT Location, COUNT(*) AS Count
+        FROM (
+            SELECT Posts.OwnerUserId, Users.Id, Users.Location
+            FROM Users
+            JOIN Posts ON Users.Id = Posts.OwnerUserId
+        )
+        WHERE Location NOT IN (\'\')
+        GROUP BY Location
+        ORDER BY Count DESC
+        LIMIT 10')
+  s2
+}
+sql_2(Posts, Users)
+```
+
+
+In the approach with only base functions, we create a data frame 'Joined' which is a merged 'Posts' and 'Users' excluding the locations which are empty. Then the function table() counts the occurrences of each location.
+```{r base_2, warning=FALSE, cache=TRUE}
+base_2 <- function(Posts, Users){
+  
+  Joined <- merge(Posts, Users, by.x = "OwnerUserId", by.y = "Id")
+  Joined <- Joined[Joined$Location != "", c(1,2,28)]
+      
+  df <- as.data.frame(table(Joined$Location)) 
+  colnames(df) <- c("Location", "Count")
+  df <- df[order(df$Count, decreasing = TRUE),] 
+  rownames(df) <- NULL
+  
+  df[1:10,]
+}
+base_2(Posts, Users)
+```
+
+
+With dplyr package it is easy to cut out the chosen rows by slice(). In the end, I cut the first row of the results, because it was the one with empty location. We could also omit this one by filter function performed on the data frame.
+```{r dplyr_2, warning=FALSE, cache=TRUE}
+dplyr_2 <- function(Posts, Users){
+  
+  df <- Posts %>%
+    inner_join(., Users,by= c("OwnerUserId"="Id")) %>%
+    add_count(.,Location,wt=NULL,name = "Count") %>%
+    distinct(.,Location, Count, .keep_all = TRUE) %>%
+    select("Location", "Count") %>% 
+    arrange(.,desc(Count)) %>% 
+    slice(2:11) 
+  
+ df 
+}
+dplyr_2(Posts, Users)
+```
+
+
+In this approach, thanks to data table, we can merge datasets by simply putting one of them inside the square brackets of the other and setting 'on' argument similarily to below.
+```{r datatable_2, warning=FALSE, cache=TRUE}
+datatable_2 <- function(Posts, Users){
+  
+  PostsDT <- as.data.table(Posts)
+  UsersDT <- as.data.table(Users)
+  dt <- PostsDT[UsersDT, on=c(OwnerUserId="Id")]
+  dt <- unique(dt[, .(OwnerUserId, Id, Location)], by = "Id") 
+  
+  CountVAL <- dt[, .(Count = .N), key = Location]
+  dt <- CountVAL[dt, on = "Location"]
+  
+  dt <- unique(dt[Location != "", .(Location, Count)], by = "Location")
+  dt <- setorder(dt, -Count)
+  dt[1:10,]
+}
+datatable_2(Posts, Users)
+```
+
+
+Checking the correctness of each of those functions by compare function and we can tell by the results that the solutions are equivalent. 
+```{r compare2, warning=FALSE, message=FALSE, cache=TRUE}
+compare(sql_2(Posts, Users), base_2(Posts, Users), allowAll = TRUE)
+compare(sql_2(Posts, Users), dplyr_2(Posts, Users), allowAll = TRUE)
+compare(sql_2(Posts, Users), datatable_2(Posts, Users), allowAll = TRUE)
+
+```
+
+
+
+Comparison of the execution times of each function is presented below. 
+```{r micro2, warning=FALSE, cache=TRUE}
+microbenchmark(
+sqldf=sql_2(Posts, Users),
+base=base_2(Posts, Users),
+dplyr=dplyr_2(Posts, Users),
+data.table=datatable_2(Posts, Users)
+)
+```
+
+
+## Third query
+In the third task the query must return the basic data of ten users who have the biggest average count of answers. To get that, firstly we need to count the answers of the users on only the posts which are of type 2 and then take an average of all the entries grouped by user.
+
+```{r sql_3, warning=FALSE, cache=TRUE}
+sql_3 <- function(Posts, Users){
+  s3<-sqldf('SELECT Users.AccountId, Users.DisplayName, Users.Location, AVG(PostAuth.AnswersCount) as AverageAnswersCount
+            FROM (
+                  SELECT AnsCount.AnswersCount, Posts.Id, Posts.OwnerUserId
+                  FROM (
+                      SELECT Posts.ParentId, COUNT(*) AS AnswersCount
+                      FROM Posts
+                      WHERE Posts.PostTypeId = 2
+                      GROUP BY Posts.ParentId
+                  ) AS AnsCount
+            JOIN Posts ON Posts.Id = AnsCount.ParentId
+            ) AS PostAuth
+            JOIN Users ON Users.AccountId=PostAuth.OwnerUserId
+            GROUP BY OwnerUserId
+            ORDER BY AverageAnswersCount DESC
+            LIMIT 10')
+  s3
+}
+sql_3(Posts, Users) 
+```
+
+
+Using only the base functions, I firstly created a data frame 'AnsCount' with a new column 'Count' of only posts of type 2. Then, in the latter part, I use function aggregare() to take the average of 'AnswersCount' in terms of 'AccountId'. 
+```{r base_3, warning=FALSE, cache=TRUE}
+base_3 <- function(Posts, Users){
+  
+  ParentIdCount <- subset(Posts, Posts$PostTypeId == 2, c("ParentId"))
+  AnsCount <- as.data.frame(table(ParentIdCount))
+  colnames(AnsCount) <- c("Id", "AnswersCount")
+ 
+  PostAuth <- merge(AnsCount, Posts[ , c("Id", "OwnerUserId")]) 
+
+  df <- merge(Users, PostAuth, by.x = "AccountId", by.y = "OwnerUserId")
+  df <- df[,c(1,5,8,14)]
+  df <- merge(df, aggregate(AnswersCount ~ AccountId, mean, data = df))
+  df <- df[,c(1,3,4,2)]
+  colnames(df) = c("AccountId", "DisplayName","Location", "AverageAnswersCount")
+  df <- df[order(df$AverageAnswersCount, decreasing = TRUE),]
+  rownames(df) <- NULL
+  df[1:10,]
+}
+base_3(Posts, Users)
+```
+
+
+The dplyr package allows us to filter out 'Posts' by their type. In this solution I use the function inner_join() twice: while merged 'Posts' with 'AnsCount' and then 'PostAuth' with 'Users'.
+```{r dplyr_3, warning=FALSE, cache=TRUE}
+dplyr_3 <- function(Posts, Users){
+  
+  AnsCount <- Posts %>%
+    filter(.,PostTypeId == 2) %>%
+    add_count(.,ParentId,wt=NULL,sort=FALSE,name = "AnswersCount") %>%
+    distinct(.,ParentId, AnswersCount, .keep_all = TRUE) %>%
+    select(ParentId,AnswersCount)
+  
+  PostAuth <- Posts %>%
+    inner_join(., AnsCount,by= c("Id"="ParentId")) %>%
+    select(AnswersCount, Id, OwnerUserId)
+  
+  df <- PostAuth %>%
+    group_by(OwnerUserId) %>% 
+    summarize(AverageAnswersCount = mean(AnswersCount)) %>%
+    inner_join(., Users,by= c("OwnerUserId"="AccountId")) %>%
+    select(OwnerUserId, DisplayName, Location, AverageAnswersCount) %>%
+    arrange(., desc(AverageAnswersCount))  %>%
+    rename(., AccountId = OwnerUserId) %>%
+    slice(1:10)
+
+    as.data.frame(df)
+}
+dplyr_3(Posts, Users)
+```
+
+
+Here, with data.table package, I added 'AnsCount' which is the data table containing count of answers by key 'ParentId' of posts of type 2. 'AvgVAL' is the data table containing average count of answers by key 'OwnerUserId'. To get rid of rows with missing values in columns 'OwnerUserId' and 'AverageAnswersCount' I used na.omit() function.  
+```{r datatable_3, warning=FALSE, cache=TRUE}
+datatable_3 <- function(Posts, Users){
+  PostsDT <- as.data.table(Posts)
+  AnsCount <- PostsDT[PostTypeId == 2, .(AnswersCount = .N), key = ParentId]
+  
+  PostAuth <- PostsDT[AnsCount, on = c(Id = "ParentId"), .(AnswersCount, Id, OwnerUserId)]
+  AvgVAL <- PostAuth[, .(AverageAnswersCount = mean(AnswersCount)), key = OwnerUserId]
+  
+  dt <- na.omit(PostAuth[AvgVAL, on = "OwnerUserId", .(OwnerUserId, AverageAnswersCount)], cols = "OwnerUserId")
+  dt <- na.omit(dt[Users, on = c(OwnerUserId = "AccountId"),
+                   .(AccountId, DisplayName, Location, AverageAnswersCount)], cols = "AverageAnswersCount")
+  dt <- unique(setorder(dt, -AverageAnswersCount), by = "AccountId")
+  
+  dt[1:10, ]
+}
+datatable_3(Posts, Users)
+```
+
+
+Checking the correctness of each of those functions by compare function and we can tell by the results that the solutions are equivalent. 
+```{r compare3, warning=FALSE, message=FALSE, cache=TRUE}
+compare(sql_3(Posts, Users), base_3(Posts, Users), allowAll = TRUE)
+compare(sql_3(Posts, Users), dplyr_3(Posts, Users), allowAll = TRUE)
+compare(sql_3(Posts, Users), datatable_3(Posts, Users), allowAll = TRUE)
+
+```
+
+
+
+Comparison of the execution times of each function is presented below. 
+```{r micro3, warning=FALSE, cache=TRUE}
+microbenchmark(
+sqldf=sql_3(Posts, Users),
+base=base_3(Posts, Users),
+dplyr=dplyr_3(Posts, Users),
+data.table=datatable_3(Posts, Users)
+)
+```
+
+
+## Fourth query
+In the fourth task the query must return the most up voted post in each year and show along with the count of them. To get that, firstly we count all the votes from each year including only votes of type 2. Then after joining the data with 'Posts' they can be grouped and ordered ascending by year.  
+
+```{r sql_4, warning=FALSE, cache=TRUE}
+sql_4 <- function(Votes,Posts){
+  s4<-sqldf('SELECT Posts.Title, UpVotesPerYear.Year, MAX(UpVotesPerYear.Count) AS Count
+            FROM (
+                  SELECT PostId, COUNT(*) AS Count, STRFTIME(\'%Y\', Votes.CreationDate) AS Year
+                  FROM Votes
+                  WHERE VoteTypeId=2
+                  GROUP BY PostId, Year
+                  ) AS UpVotesPerYear
+            JOIN Posts ON Posts.Id=UpVotesPerYear.PostId
+            WHERE Posts.PostTypeId=1
+            GROUP BY Year
+            ORDER BY Year ASC')
+  s4
+}
+sql_4(Votes, Posts)
+```
+
+
+Using only the base functions, I created a data frame 'UpVotesPerYear' with new columns 'Year' and 'Count' of only votes of type 2. To extract the year from the date we can use function strftime() while specifying the format. In the end, by using merge() and unique() I chose the biggest number of counts according to each year.
+```{r base_4, warning=FALSE, cache=TRUE}
+base_4 <- function(Votes,Posts){
+  
+  PostIdYear <-subset(Votes, Votes$VoteTypeId == 2, c("PostId","CreationDate"))
+  PostIdYear$Year <- strftime(PostIdYear$CreationDate, format = "%Y")
+  
+  UpVotesPerYear <- aggregate(PostIdYear$PostId, by=list(PostIdYear$PostId, PostIdYear$Year), FUN=function(x){NROW(x)})
+  colnames(UpVotesPerYear) <- c("Id", "Year", "Count")
+
+  df <- merge(UpVotesPerYear, Posts)
+  df <- subset(df, df$PostTypeId==1, c("Title", "Count", "Year"))
+  df <- unique(merge(aggregate(Count ~ Year, max, data = df), df))
+  df <- df[,c(3,1,2)]
+
+  df
+}
+base_4(Votes, Posts)
+```
+
+
+With dplyr package, we can use function mutate() that adds new variables and preserves existing ones. In this case function slice() chooses rows based on the 'Count' column.
+```{r dplyr_4, warning=FALSE, cache=TRUE}
+dplyr_4 <- function(Votes,Posts){
+  
+  UpVotesPerYear <- Votes %>%
+    mutate(., Year = strftime(CreationDate, format = "%Y")) %>%
+    filter(.,VoteTypeId == 2) %>%
+    group_by(PostId, Year) %>%
+    add_count(.,PostId,wt=NULL,sort=FALSE,name = "Count") %>%
+    distinct(.,PostId, Count, .keep_all = TRUE) %>%
+    select(PostId, Count, Year)
+    
+ df <- Posts %>%
+   inner_join(., UpVotesPerYear, by = c("Id" = "PostId")) %>%
+   filter(.,PostTypeId == 1) %>%
+   group_by(Year) %>%
+   slice(which.max(Count)) %>%
+   arrange(., Year)  %>%
+   select(Title, Year, Count)
+   
+  df
+}
+dplyr_4(Votes, Posts)
+```
+
+
+With data.table package, I added a new column 'Year' by reference to 'CreationDate' using assignment operator ':='. Function na.omit() is useful in getting rid of rows with missing values in columns 'Year' and 'Count'. Choosing rows based on the 'Count' column is done by .SD which is a data table itself.
+```{r datatable_4, warning=FALSE, cache=TRUE}
+datatable_4 <- function(Votes,Posts){
+  
+  VotesDT <- as.data.table(Votes)
+  VotesDT <- VotesDT[, Year := strftime(CreationDate, format = "%Y")] 
+  UpVotesPerYear <- VotesDT[VoteTypeId == 2, .(Count = .N), key = c("PostId", "Year")]
+ 
+  dt <- na.omit(UpVotesPerYear[Posts, on = c(PostId = "Id")], cols = c("Year", "Count"))
+  dt <- dt[PostTypeId == 1, .(Title, Year, Count)]
+  dt <- dt[, .SD[which.max(Count)], by=Year]
+  dt <- setorder(dt, Year)
+  dt <- setcolorder(dt, c("Title", "Year", "Count"))
+  
+  dt
+}
+datatable_4(Votes, Posts)
+```
+
+
+Checking the correctness of each of those functions by compare function and we can tell by the results that the solutions are equivalent. 
+```{r compare4, warning=FALSE, message=FALSE, cache=TRUE}
+compare(sql_4(Votes, Posts), base_4(Votes, Posts), allowAll = TRUE)
+compare(sql_4(Votes, Posts), dplyr_4(Votes, Posts), allowAll = TRUE)
+compare(sql_4(Votes, Posts), datatable_4(Votes, Posts), allowAll = TRUE)
+
+```
+
+
+Comparison of the execution times of each function is presented below.
+```{r micro4, warning=FALSE, cache=TRUE}
+microbenchmark(
+sqldf=sql_4(Votes, Posts),
+base=base_4(Votes, Posts),
+dplyr=dplyr_4(Votes, Posts),
+data.table=datatable_4(Votes, Posts),
+times=1)
+```
+
+
+## Fifth query
+In the fifth task, the query must return the posts with the most votes given earlier than in the year 2020. Moreover, the said posts could not have any new votes. Firstly, we create a subset with votes of types 1, 2, and 5 and label each of them as either old or new. After that, we extract the posts of type 1, which have exactly zero new votes, and order them by the number of old votes.
+
+```{r sql_5, warning=FALSE, cache=TRUE}
+sql_5 <- function(Votes, Posts){
+  s5<-sqldf('SELECT Posts.Title, VotesByAge2.OldVotes
+            FROM Posts
+            JOIN (
+                SELECT PostId, MAX(CASE WHEN VoteDate = \'new\' THEN Total ELSE 0 END) NewVotes, MAX(CASE WHEN VoteDate = \'old\' THEN Total ELSE 0 END) OldVotes, SUM(Total) AS Votes
+                FROM (
+                      SELECT PostId, CASE STRFTIME(\'%Y\', CreationDate)WHEN \'2021\' THEN \'new\' WHEN \'2020\' THEN \'new\' ELSE \'old\' END VoteDate,COUNT(*) AS Total
+                      FROM Votes
+                      WHERE VoteTypeId IN (1, 2, 5)
+                      GROUP BY PostId, VoteDate
+                ) AS VotesByAge
+                GROUP BY VotesByAge.PostId
+                HAVING NewVotes=0
+            ) AS VotesByAge2 ON VotesByAge2.PostId=Posts.ID
+            WHERE Posts.PostTypeId=1
+            ORDER BY VotesByAge2.OldVotes DESC
+            LIMIT 10')
+  s5
+}
+sql_5(Votes, Posts)
+```
+
+
+Using only the base functions, I created a data frame 'VotesByType' and using function transform() I added 'VoteDate' column with function ifelse(). Data frame 'VotesByAge' was created by aggregating 'Total' column to the previous one. In 'VotesByAge2' I again used transform() and ifelse() functions in order to create two new columns. The x variable holds the ids of posts that do not have any new votes and then I make a subset of data frames accordingly with is.element() function. The results are ordered decreasing.
+```{r base_5, warning=FALSE, cache=TRUE}
+base_5 <- function(Votes, Posts){
+  
+  VotesOfType <-subset(Votes, Votes$VoteTypeId %in% c(1,2,5), c("PostId","CreationDate"))
+  VotesOfType$Year <- strftime(VotesOfType$CreationDate, format = "%Y")
+  VotesOfType = transform(VotesOfType, VoteDate= ifelse(Year=="2021" | Year=="2020", "new", "old"))
+  
+  VotesByAge <- aggregate(VotesOfType$PostId,
+                          by=list(VotesOfType$PostId, VotesOfType$VoteDate), FUN=function(x){NROW(x)})
+  colnames(VotesByAge) = c("PostId", "VoteDate", "Total")
+  
+  VotesByAge2 <- transform(VotesByAge, NewVotes = ifelse(VoteDate=="new", VotesByAge$Total, 0),
+                          OldVotes = ifelse(VoteDate=="old", VotesByAge$Total, 0), Votes=VotesByAge$Total)
+  VotesByAge2 <- VotesByAge2[,c(1,4,5,6)]
+  VotesByAge2 <- VotesByAge2[order(VotesByAge$PostId, decreasing = FALSE),] 
+  
+  x <- ifelse(VotesByAge2$NewVotes!=0, VotesByAge2$PostId, 0)
+  VotesByAge2 <- subset(VotesByAge2, !is.element(VotesByAge2$PostId, x))
+
+  s <- subset(Posts, Posts$PostTypeId==1, c("Id", "Title"))
+  df <- merge(s, VotesByAge2, by.x="Id", by.y="PostId" )
+  df <- df[order(df$OldVotes, decreasing = TRUE),] 
+  df <- df[,c(2,4)]
+  rownames(df) <- NULL
+  
+  df[1:10,]
+}
+base_5(Votes, Posts)
+```
+
+
+In the dplyr package, we can easily transform the data frames using mutate() and create new columns based on cases with function case_when(). Another interesting function from this package I learned is the ungroup(), which is often used after finishing with the calculations.
+```{r dplyr_5, warning=FALSE, cache=TRUE}
+dplyr_5 <- function(Votes, Posts){
+  
+  VotesByAge <- Votes %>%
+    filter(.,VoteTypeId %in% c(1,2,5)) %>%
+    mutate(VoteDate = case_when( 
+            strftime(CreationDate, format = "%Y") == "2021" ~ "new",
+            strftime(CreationDate, format = "%Y") == "2020" ~ "new",
+            TRUE ~ "old")) %>%
+    group_by(PostId, VoteDate) %>%
+    add_count(., PostId,wt=NULL,sort=FALSE,name = "Total") %>%
+    distinct(., PostId, Total, .keep_all = TRUE) %>%
+    select(PostId, VoteDate, Total)
+    
+  VotesByAge2 <- VotesByAge %>%
+    mutate(NewVotes = case_when(VoteDate == "new" ~ as.numeric(Total),TRUE ~ 0), 
+      OldVotes = case_when(VoteDate == "old" ~ as.numeric(Total), TRUE ~ 0)) %>%
+    rename(.,Votes = Total) %>%
+    ungroup() %>%
+    select(PostId, NewVotes, OldVotes, Votes)
+    
+    x <- ifelse(VotesByAge2$NewVotes!=0, VotesByAge2$PostId, 0)
+  
+  VotesByAge2 <- VotesByAge2 %>%
+    filter(., !(PostId %in% x)) %>%
+    arrange(., PostId)
+  
+  df <- Posts %>%
+    inner_join(., VotesByAge2, by = c("Id" = "PostId")) %>%
+    filter(., PostTypeId == 1) %>%
+    arrange(., desc(OldVotes)) %>%
+    select(Title, OldVotes) %>%
+    slice(1:10)
+    
+  df
+}
+dplyr_5(Votes, Posts)
+```
+
+
+In this approach, I again used assigning operator ':=', which in this case announces the assigning of everything that is in the brackets after it. THe operator %in% is a very useful and convenient way of checking if a 'PostId' is in the vector x. Also, I again had to use na.omit() function to get rid of rows with missing data. 
+```{r datatable_5, warning=FALSE, cache=TRUE}
+datatable_5 <- function(Votes, Posts){
+  
+  VotesDT <- as.data.table(Votes)
+  VotesDT <- VotesDT[, Year := strftime(Votes$CreationDate, format = "%Y")]
+  VotesDT <- VotesDT[, VoteDate := ifelse(Year=="2021" | Year=="2020", "new", "old")]
+  VotesByAge <- VotesDT[VoteTypeId %in% c(1,2,5), .(Total = .N), key = c("PostId", "VoteDate")]
+  
+  VotesByAge2 <- VotesByAge[, ':='(NewVotes=ifelse(VoteDate=="new", VotesByAge$Total, 0), 
+                                   OldVotes=ifelse(VoteDate=="old", VotesByAge$Total, 0),
+                                   Votes=Total)]
+  
+  x <- ifelse(VotesByAge2$NewVotes!=0, VotesByAge2$PostId, 0)
+  VotesByAge2 <- VotesByAge[!(PostId %in% x), .(PostId, NewVotes, OldVotes, Votes)]
+  
+  dt <- na.omit(VotesByAge2[Posts, on = c(PostId = "Id")], cols = "OldVotes")
+  dt <- setorder(dt[PostTypeId == 1, .(Title, OldVotes)], -OldVotes)
+  
+  dt[1:10,]
+}
+datatable_5(Votes, Posts)
+```
+
+
+Checking the correctness of each of those functions by compare function and we can tell by the results that the solutions are equivalent. 
+```{r compare5, warning=FALSE, message=FALSE, cache=TRUE}
+compare(sql_5(Votes, Posts), base_5(Votes, Posts), allowAll = TRUE)
+compare(sql_5(Votes, Posts), dplyr_5(Votes, Posts), allowAll = TRUE)
+compare(sql_5(Votes, Posts), datatable_5(Votes, Posts), allowAll = TRUE)
+
+```
+
+
+Comparison of the execution times of each function is presented below. 
+```{r micro5, warning=FALSE, cache=TRUE}
+microbenchmark(
+sqldf=sql_5(Votes, Posts),
+base=base_5(Votes, Posts),
+dplyr=dplyr_5(Votes, Posts),
+data.table=datatable_5(Votes, Posts),
+times=1)
+```
+
